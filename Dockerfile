@@ -95,12 +95,19 @@ RUN --mount=type=secret,id=custom-ca,required=false \
 
 # --- User: tester, uid 1000, sudoer, member of the docker group ------------
 # docker.io creates the `docker` group, so this must come after that install.
-# No password is set on the account (locked): login is by SSH key only.
-RUN useradd --create-home --uid 1000 --shell /bin/bash tester \
+# ubuntu:24.04 already ships a user `ubuntu` with uid 1000, so it is removed
+# first (guarded — a future base image without it still builds). Without
+# that step `useradd --uid 1000` fails with "UID 1000 is not unique".
+# No password can ever match (`*` in the shadow file) — but the account is
+# NOT locked. `passwd --lock` would break SSH key login: with UsePAM off,
+# sshd refuses a locked account for every auth method, key included
+# (proven 14 Nov 2026: "User tester not allowed because account is locked").
+RUN if id ubuntu >/dev/null 2>&1; then userdel --remove ubuntu; fi \
+    && useradd --create-home --uid 1000 --shell /bin/bash tester \
     && usermod --append --groups sudo,docker tester \
     && printf '%s\n' 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester \
     && chmod 0440 /etc/sudoers.d/tester \
-    && passwd --lock tester \
+    && usermod --password '*' tester \
     && mkdir -p /home/tester/.ssh /home/tester/work /var/run/sshd /run/tailscale \
     && chown --recursive tester:tester /home/tester \
     && chmod 700 /home/tester/.ssh

@@ -73,7 +73,7 @@ tailscale status            # tailnet status; tailscale ip -4 for its IP
 Read these before running it somewhere that matters.
 
 - `privileged: true` is required — Docker-in-Docker manages iptables and its bridge, and Tailscale needs `/dev/net/tun`. A privileged container is effectively root on the host. Only run this on machines you trust, and only for testing.
-- `tester` has passwordless sudo by design. The account itself has no password (locked) — login is by SSH key only, and root login is disabled (`PermitRootLogin no`).
+- `tester` has passwordless sudo by design. The account has no usable password — the shadow entry is `*`, so no password can ever match. It is deliberately *not* locked (`passwd --lock` would make sshd refuse even key login, since this box runs with `UsePAM no`). Login is by SSH key only, and root login is disabled (`PermitRootLogin no`).
 - `.env` is tracked in the repo with placeholder values only — never put a real `TS_AUTHKEY` in the committed copy. Pass it in your shell (`export TS_AUTHKEY=...`) before `docker compose up`; compose prefers shell env over `.env`. Never put an SSH *private* key in this repo.
 - Tailscale SSH (`TS_SSH=true`) is off by default. Turning it on adds Tailscale's own SSH on top of OpenSSH; it uses tailnet ACLs, not `authorized_keys`.
 
@@ -91,11 +91,27 @@ Read these before running it somewhere that matters.
 ## Troubleshooting
 
 - **SSH says "Permission denied (publickey)"** — the box has no key for you yet. Check `docker compose exec sandbox ls -l /home/tester/.ssh/` and that `TESTER_AUTHORIZED_KEY` in `.env` (or your shell) held your real public key *before* the first boot. If the volume already exists with an empty key file, add the key with `docker compose exec sandbox sh -c 'cat >> /home/tester/.ssh/authorized_keys'` or wipe the volume (`down -v`, then fix the key and `up` again).
-- **Not on the tailnet** — `docker compose exec sandbox tailscale status`. If `TS_AUTHKEY` was empty at boot, run `tailscale up` inside the box, or set the key in your shell and recreate.
+- **Not on the tailnet** — `docker compose exec sandbox tailscale status`. If `TS_AUTHKEY` was empty at boot, run `tailscale up` inside the box, or set the key in your shell and recreate. If the key is bad or expired, the entrypoint's `tailscale up` gives up after 120 seconds (it cannot stall the box) and the box still comes up — check `tail /var/log/tailscaled.log` for the control plane's answer; a `400 Bad Request` on `/machine/register` means the key itself was rejected.
 - **Inner `docker` fails** — check `docker compose exec sandbox tail -n 50 /var/log/dockerd.log`. The box must be `privileged: true`; without it dockerd cannot set up networking.
 - **"port 2222 is already allocated"** — another service uses 2222 on the host. Change the left side of `"2222:22"` in `compose.yml`.
 - **Build fails at the Tailscale step with a certificate error** — your network intercepts TLS with a private CA (corporate proxy). Pass the CA as a build secret and the build trusts it just for that step: `podman build --secret id=custom-ca,src=/path/to/ca.pem .` (or `docker build --secret ...`). Without the secret the stock Ubuntu CA store is used.
 
 ## Verified status
 
-Not yet verified end to end. The image build is still running on the test machine (see the certificate note above). What is verified so far: the Dockerfile's package list installs cleanly on Ubuntu 24.04 (Docker 29.1.3, Compose v2 2.40.3, buildx 0.30.1), the compose file parses, and the optional `custom-ca` build secret works both with a secret passed and without one. Still to check once the build lands: `dockerd` inside the box, a `hello-world` image and an inner container surviving a full recreate, SSH as `tester` (uid 1000, sudo works, root login refused), and a stable host-key fingerprint. Tailscale: `tailscaled` starts and its state directory persists, but a live tailnet join was **not** verified here — no auth key was available on the test machine. Give the box a real `TS_AUTHKEY` once and confirm with `tailscale status` inside it.
+Tested 14 Nov 2026 on a Podman VM (no Docker on the host). The test script is not in this repo (`~/workspace/sandbox-test/run-tests.sh` on the test machine); 18 of 26 checks pass, and every failure is traced to the test environment, not the product.
+
+Proven:
+
+- Image builds clean (16/16 steps), `VERSION` label `1.0.0`, no secrets baked in.
+- SSH as `tester` (uid 1000, sudo + docker groups) with a key; root login, password login and a wrong key are all refused.
+- Tester reads and writes `/home/tester/work` and `.ssh`.
+- `dockerd` 29.1.3 (overlay2) starts and answers as tester; `docker load`, `docker images` and `docker create` work as tester.
+- After a recreate with no key supplied: SSH still works, host keys unchanged, work file intact.
+- A bad `TS_AUTHKEY` cannot stall the box: `tailscale up` is time-boxed to 120s, then the entrypoint warns and sshd still comes up.
+
+Not provable on that VM (needs a real Docker host):
+
+- `docker run` as tester: the VM strips `NET_ADMIN`/`NET_RAW` from containers (PID 1 `CapEff` has neither), so `dockerd` cannot create its iptables rules, and its read-only cgroupfs blocks starting a container (`mkdir /sys/fs/cgroup/docker: read-only file system`). `privileged: true` in `compose.yml` grants both on a real host.
+- `tailscaled` in normal (tun) mode, for the same `NET_ADMIN` reason. Userspace networking (`TS_TUN=userspace-networking`) works and reaches the control plane, but the auth key supplied for the test was rejected by it (`400 Bad Request` on `/machine/register` — invalid or expired key).
+
+Still to check on a real machine with a fresh reusable auth key: `docker run --rm hello-world` as tester, and `ssh tester@<tailscale-ip>` over the tailnet.

@@ -52,6 +52,8 @@ services:
       TS_ACCEPT_ROUTES: ${TS_ACCEPT_ROUTES:-false}
       TS_SSH: ${TS_SSH:-false}
       TS_ADVERTISE_ROUTES: ${TS_ADVERTISE_ROUTES:-}
+      # Only set on restricted hosts (no usable /dev/net/tun): "userspace-networking"
+      TS_TUN: ${TS_TUN:-}
       TESTER_AUTHORIZED_KEY: ${TESTER_AUTHORIZED_KEY:-}
       TZ: ${TZ:-Europe/London}
     volumes:

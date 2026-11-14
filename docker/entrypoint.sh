@@ -50,10 +50,17 @@ fi
 # tailscaled needs /dev/net/tun (compose mounts it) and NET_ADMIN — both are
 # provided by privileged: true in compose.yml. If the device is missing the
 # daemon still starts but cannot create the tunnel; that is logged, not fatal.
-tailscaled \
-    --state=/var/lib/tailscale/tailscaled.state \
-    --socket=/var/run/tailscale/tailscaled.sock \
-    --port="${TS_PORT:-41641}" \
+# TS_TUN is an escape hatch for restricted hosts (e.g. a hypervisor that
+# strips NET_ADMIN, or no usable /dev/net/tun): set it to
+# "userspace-networking" and tailscaled tunnels in userspace instead, at
+# slower speed but with no privileged device. Leave it unset for normal use.
+TAILSCALED_ARGS=(
+    --state=/var/lib/tailscale/tailscaled.state
+    --socket=/var/run/tailscale/tailscaled.sock
+    --port="${TS_PORT:-41641}"
+)
+[ -n "${TS_TUN:-}" ] && TAILSCALED_ARGS+=(--tun="$TS_TUN")
+tailscaled "${TAILSCALED_ARGS[@]}" \
     >/var/log/tailscaled.log 2>&1 &
 TAILSCALED_PID=$!
 
@@ -72,10 +79,14 @@ if [ -S /var/run/tailscale/tailscaled.sock ]; then
         [ "${TS_ACCEPT_ROUTES:-false}" = "true" ] && UP_ARGS+=(--accept-routes)
         [ "${TS_SSH:-false}" = "true" ] && UP_ARGS+=(--ssh)
         [ -n "${TS_ADVERTISE_ROUTES:-}" ] && UP_ARGS+=(--advertise-routes="$TS_ADVERTISE_ROUTES")
-        if tailscale "${UP_ARGS[@]}" >>/var/log/tailscaled.log 2>&1; then
+        # A bad/expired key makes `tailscale up` retry forever (proven
+        # 14 Nov 2026: control plane answered 400 and up never returned).
+        # Time-box it so a bad key cannot stall the box — sshd must still
+        # come up so the box stays reachable for debugging.
+        if timeout 120 tailscale "${UP_ARGS[@]}" >>/var/log/tailscaled.log 2>&1; then
             log "Tailscale: joined tailnet as ${TS_HOSTNAME:-sandbox}, IP $(tailscale ip -4 | head -n 1)"
         else
-            log "WARNING: 'tailscale up' failed — see /var/log/tailscaled.log; container continues without tailnet"
+            log "WARNING: 'tailscale up' failed or timed out — see /var/log/tailscaled.log; container continues without tailnet"
         fi
     else
         log "WARNING: Tailscale not logged in and TS_AUTHKEY is not set — tailscaled is running, run 'tailscale up' inside or set TS_AUTHKEY and recreate"

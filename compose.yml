@@ -1,0 +1,78 @@
+# sandbox — one Ubuntu box for testing, reachable over Tailscale, with
+# Docker-in-Docker. Run on any machine with Docker + Compose installed.
+#
+#   Put your SSH public key in .env as TESTER_AUTHORIZED_KEY (it is public,
+#   so it is safe to commit) and export a reusable TS_AUTHKEY in your shell:
+#   export TS_AUTHKEY=tskey-auth-...
+#   docker compose up -d --build
+#   ssh -i ~/.ssh/id_ed25519 -p 2222 tester@localhost     # or tester@<tailscale-ip>
+#
+# Persistence (the five requirements, mapped to volumes):
+#   1. Docker images/containers survive recreate  -> docker-data:/var/lib/docker
+#   2. Testing ground files survive recreate      -> sandbox-work:/home/tester/work
+#   3. Tailscale login survives recreate          -> tailscale-state:/var/lib/tailscale
+#      (first boot needs TS_AUTHKEY; after that the state on the volume is
+#      enough and the key is not needed again — use a *reusable* auth key)
+#   4. SSH host keys + tester keys survive        -> ssh-host-keys:/etc/ssh
+#                                                    tester-ssh:/home/tester/.ssh
+#   5. tester (uid 1000, sudoer) is the SSH user  -> Dockerfile
+#      (sshd_config heredoc: PermitRootLogin no, AllowUsers tester, key-only)
+#
+# `docker compose down` keeps all five volumes. `docker compose down -v`
+# DESTROYS them — that is the only way to lose the persisted state, so
+# treat `-v` as "factory reset this box".
+
+name: sandbox
+
+services:
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-latest}
+    image: sandbox:${VERSION:-latest}
+    container_name: sandbox
+    hostname: sandbox
+    # Docker-in-Docker + Tailscale both need this: dockerd manages iptables
+    # and its bridge, tailscaled needs /dev/net/tun and NET_ADMIN. A sandbox
+    # is root-equivalent on the host by design — see the security notes at
+    # the top of the Dockerfile.
+    privileged: true
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      # Host-side SSH for machines on the same LAN / the host itself.
+      # Over Tailscale, SSH goes straight to port 22 on the tailnet IP —
+      # no mapping needed there.
+      - "2222:22"
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_HOSTNAME: ${TS_HOSTNAME:-sandbox}
+      TS_ACCEPT_ROUTES: ${TS_ACCEPT_ROUTES:-false}
+      TS_SSH: ${TS_SSH:-false}
+      TS_ADVERTISE_ROUTES: ${TS_ADVERTISE_ROUTES:-}
+      TESTER_AUTHORIZED_KEY: ${TESTER_AUTHORIZED_KEY:-}
+      TZ: ${TZ:-Europe/London}
+    volumes:
+      - docker-data:/var/lib/docker
+      - tailscale-state:/var/lib/tailscale
+      - tester-ssh:/home/tester/.ssh
+      - ssh-host-keys:/etc/ssh
+      - sandbox-work:/home/tester/work
+    # tester's authorized_keys is seeded from TESTER_AUTHORIZED_KEY (.env)
+    # on first boot only, when the tester-ssh volume is still empty — the
+    # volume always wins after that.
+    restart: unless-stopped
+
+volumes:
+  docker-data:
+    name: sandbox-docker-data
+  tailscale-state:
+    name: sandbox-tailscale-state
+  tester-ssh:
+    name: sandbox-tester-ssh
+  ssh-host-keys:
+    name: sandbox-ssh-host-keys
+  sandbox-work:
+    name: sandbox-work

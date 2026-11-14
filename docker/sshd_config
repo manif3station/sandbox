@@ -1,0 +1,14 @@
+# sandbox sshd — key-only login as tester; root cannot log in at all.
+# Only the options that differ from Debian/Ubuntu defaults (or that must
+# never silently change) are stated here; the rest stay at their defaults.
+Port 22
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+ChallengeResponseAuthentication no
+UsePAM no
+AllowUsers tester
+AuthorizedKeysFile .ssh/authorized_keys
+StrictModes yes
+PrintMotd no
+Subsystem sftp /usr/lib/openssh/sftp-server

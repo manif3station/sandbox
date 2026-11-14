@@ -15,28 +15,29 @@ One Ubuntu box for testing, runnable on any machine on your Tailscale network. S
 ## Quick start
 
 ```sh
-# Put your SSH public key in .env as TESTER_AUTHORIZED_KEY (it is public,
-# so it is safe to commit), and export a reusable Tailscale auth key:
+# Put your SSH public key in config/docker/sandbox/.env as
+# TESTER_AUTHORIZED_KEY (it is public, so it is safe to commit), and export
+# a reusable Tailscale auth key:
 export TS_AUTHKEY=tskey-auth-...
-docker compose up -d --build
+docker compose -f config/docker/sandbox/compose.yml up -d --build
 ssh -i ~/.ssh/id_ed25519 -p 2222 tester@localhost
 # or, once it is on the tailnet: ssh tester@<tailscale-ip>
 ```
 
 Create the auth key at <https://login.tailscale.com/admin/settings/keys> → Generate auth key. Use a **reusable** key: a single-use key cannot re-join if the `tailscale-state` volume is ever lost. First boot is the only time the key is needed — after that the stored login on the volume is enough, and the key is not needed again.
 
-`VERSION` in `.env` (currently `1.0.0`) tags the image as `sandbox:<VERSION>` and is stamped on it as a label. Bump it when you change the `Dockerfile` or `compose.yml` in a way worth telling apart — `docker compose up -d --build` then builds and runs the new version.
+`VERSION` in `config/docker/sandbox/.env` (currently `1.0.0`) tags the image as `sandbox:<VERSION>` and is stamped on it as a label. Bump it when you change the `Dockerfile` or `compose.yml` in a way worth telling apart — `docker compose -f config/docker/sandbox/compose.yml up -d --build` then builds and runs the new version.
 
 ## Everyday commands
 
 ```sh
-docker compose up -d --build   # (re)create the box; volumes keep everything
-docker compose down            # stop it; volumes are kept
-docker compose logs -f sandbox # entrypoint + service logs
-docker compose exec --user tester sandbox bash   # shell inside, as tester
+docker compose -f config/docker/sandbox/compose.yml up -d --build   # (re)create the box; volumes keep everything
+docker compose -f config/docker/sandbox/compose.yml down            # stop it; volumes are kept
+docker compose -f config/docker/sandbox/compose.yml logs -f sandbox # entrypoint + service logs
+docker compose -f config/docker/sandbox/compose.yml exec --user tester sandbox bash   # shell inside, as tester
 ```
 
-`docker compose down -v` is the factory reset: it **destroys all five volumes** — Docker images, Tailscale login, SSH keys, and `~/work`. That is the only way to lose the persisted state.
+`docker compose -f config/docker/sandbox/compose.yml down -v` is the factory reset: it **destroys all five volumes** — Docker images, Tailscale login, SSH keys, and `~/work`. That is the only way to lose the persisted state.
 
 ## What persists, what does not
 
@@ -74,26 +75,26 @@ Read these before running it somewhere that matters.
 
 - `privileged: true` is required — Docker-in-Docker manages iptables and its bridge, and Tailscale needs `/dev/net/tun`. A privileged container is effectively root on the host. Only run this on machines you trust, and only for testing.
 - `tester` has passwordless sudo by design. The account has no usable password — the shadow entry is `*`, so no password can ever match. It is deliberately *not* locked (`passwd --lock` would make sshd refuse even key login, since this box runs with `UsePAM no`). Login is by SSH key only, and root login is disabled (`PermitRootLogin no`).
-- `.env` is tracked in the repo with placeholder values only — never put a real `TS_AUTHKEY` in the committed copy. Pass it in your shell (`export TS_AUTHKEY=...`) before `docker compose up`; compose prefers shell env over `.env`. Never put an SSH *private* key in this repo.
+- `config/docker/sandbox/.env` is tracked in the repo with placeholder values only — never put a real `TS_AUTHKEY` in the committed copy. Pass it in your shell (`export TS_AUTHKEY=...`) before `docker compose up`; compose prefers shell env over `.env`. Never put an SSH *private* key in this repo.
 - Tailscale SSH (`TS_SSH=true`) is off by default. Turning it on adds Tailscale's own SSH on top of OpenSSH; it uses tailnet ACLs, not `authorized_keys`.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | Ubuntu 24.04, Docker, Tailscale, `tester` (uid 1000), SSH hardening |
-| `compose.yml` | service, privileged mode, `/dev/net/tun`, all five volumes |
-| `.env` | `VERSION`, `TS_AUTHKEY`, `TS_HOSTNAME`, `TESTER_AUTHORIZED_KEY`, `TZ` — tracked, placeholder values only |
-| `docker/entrypoint.sh` | starts tailscaled → dockerd → sshd; seeds `authorized_keys` only on first boot |
-| `docker/sshd_config` | key-only, `tester` only, no root |
-| `docker/daemon.json` | overlay2, capped json-file logs |
+| `config/docker/sandbox/Dockerfile` | Ubuntu 24.04, Docker, Tailscale, `tester` (uid 1000), SSH hardening |
+| `config/docker/sandbox/compose.yml` | service, privileged mode, `init: true`, `/dev/net/tun`, all five volumes |
+| `config/docker/sandbox/.env` | `VERSION`, `TS_AUTHKEY`, `TS_HOSTNAME`, `TESTER_AUTHORIZED_KEY`, `TZ` — tracked, placeholder values only |
+| `config/docker/sandbox/docker/entrypoint.sh` | starts tailscaled → dockerd → sshd; seeds `authorized_keys` only on first boot |
+| `config/docker/sandbox/docker/sshd_config` | key-only, `tester` only, no root |
+| `config/docker/sandbox/docker/daemon.json` | overlay2, capped json-file logs |
 
 ## Troubleshooting
 
-- **SSH says "Permission denied (publickey)"** — the box has no key for you yet. Check `docker compose exec sandbox ls -l /home/tester/.ssh/` and that `TESTER_AUTHORIZED_KEY` in `.env` (or your shell) held your real public key *before* the first boot. If the volume already exists with an empty key file, add the key with `docker compose exec sandbox sh -c 'cat >> /home/tester/.ssh/authorized_keys'` or wipe the volume (`down -v`, then fix the key and `up` again).
-- **Not on the tailnet** — `docker compose exec sandbox tailscale status`. If `TS_AUTHKEY` was empty at boot, run `tailscale up` inside the box, or set the key in your shell and recreate. If the key is bad or expired, the entrypoint's `tailscale up` gives up after 120 seconds (it cannot stall the box) and the box still comes up — check `tail /var/log/tailscaled.log` for the control plane's answer; a `400 Bad Request` on `/machine/register` means the key itself was rejected.
-- **Inner `docker` fails** — check `docker compose exec sandbox tail -n 50 /var/log/dockerd.log`. The box must be `privileged: true`; without it dockerd cannot set up networking.
-- **"port 2222 is already allocated"** — another service uses 2222 on the host. Change the left side of `"2222:22"` in `compose.yml`.
+- **SSH says "Permission denied (publickey)"** — the box has no key for you yet. Check `docker compose -f config/docker/sandbox/compose.yml exec sandbox ls -l /home/tester/.ssh/` and that `TESTER_AUTHORIZED_KEY` in `config/docker/sandbox/.env` (or your shell) held your real public key *before* the first boot. If the volume already exists with an empty key file, add the key with `docker compose -f config/docker/sandbox/compose.yml exec sandbox sh -c 'cat >> /home/tester/.ssh/authorized_keys'` or wipe the volume (`down -v`, then fix the key and `up` again).
+- **Not on the tailnet** — `docker compose -f config/docker/sandbox/compose.yml exec sandbox tailscale status`. If `TS_AUTHKEY` was empty at boot, run `tailscale up` inside the box, or set the key in your shell and recreate. If the key is bad or expired, the entrypoint's `tailscale up` gives up after 120 seconds (it cannot stall the box) and the box still comes up — check `tail /var/log/tailscaled.log` for the control plane's answer; a `400 Bad Request` on `/machine/register` means the key itself was rejected.
+- **Inner `docker` fails** — check `docker compose -f config/docker/sandbox/compose.yml exec sandbox tail -n 50 /var/log/dockerd.log`. The box must be `privileged: true`; without it dockerd cannot set up networking.
+- **"port 2222 is already allocated"** — another service uses 2222 on the host. Change the left side of `"2222:22"` in `config/docker/sandbox/compose.yml`.
 - **Build fails at the Tailscale step with a certificate error** — your network intercepts TLS with a private CA (corporate proxy). Pass the CA as a build secret and the build trusts it just for that step: `podman build --secret id=custom-ca,src=/path/to/ca.pem .` (or `docker build --secret ...`). Without the secret the stock Ubuntu CA store is used.
 
 ## Verified status
@@ -111,7 +112,7 @@ Proven:
 
 Not provable on that VM (needs a real Docker host):
 
-- `docker run` as tester: the VM strips `NET_ADMIN`/`NET_RAW` from containers (PID 1 `CapEff` has neither), so `dockerd` cannot create its iptables rules, and its read-only cgroupfs blocks starting a container (`mkdir /sys/fs/cgroup/docker: read-only file system`). `privileged: true` in `compose.yml` grants both on a real host.
+- `docker run` as tester: the VM strips `NET_ADMIN`/`NET_RAW` from containers (PID 1 `CapEff` has neither), so `dockerd` cannot create its iptables rules, and its read-only cgroupfs blocks starting a container (`mkdir /sys/fs/cgroup/docker: read-only file system`). `privileged: true` in `config/docker/sandbox/compose.yml` grants both on a real host.
 - `tailscaled` in normal (tun) mode, for the same `NET_ADMIN` reason. Userspace networking (`TS_TUN=userspace-networking`) works and reaches the control plane, but the auth key supplied for the test was rejected by it (`400 Bad Request` on `/machine/register` — invalid or expired key).
 
 Still to check on a real machine with a fresh reusable auth key: `docker run --rm hello-world` as tester, and `ssh tester@<tailscale-ip>` over the tailnet.

@@ -22,10 +22,12 @@
 # DESTROYS them — that is the only way to lose the persisted state, so
 # treat `-v` as "factory reset this box".
 
-name: sandbox
-
 services:
   sandbox:
+    # tini as PID 1: reaps the background daemons (tailscaled, dockerd) and
+    # forwards signals, since the entrypoint execs sshd as PID 1 and sshd
+    # does neither. Without it, a dead daemon becomes a zombie.
+    init: true
     build:
       context: .
       dockerfile: Dockerfile

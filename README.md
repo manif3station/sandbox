@@ -99,7 +99,7 @@ Read these before running it somewhere that matters.
 
 ## Verified status
 
-Tested 14 Nov 2026 on a Podman VM. Docker 29.1.3 was later installed on the same host: the daemon runs (`iptables: false`, `bridge: none`, `storage-driver: vfs`, runtime `crun`) and `docker compose config` renders, but containers still cannot start under Docker there — the VM denies its network sandbox and its session keyring — so Podman remains the only runtime that can run a container on that host. The test script is not in this repo (`~/workspace/sandbox-test/run-tests.sh` on the test machine); 18 of 26 checks pass, and every failure is traced to the test environment, not the product.
+Tested 14 Nov 2026 on a Podman VM. Docker 29.1.3 was later installed on the same host, but containers still could not start under it — the VM denies its network sandbox and its session keyring — so Docker was removed again. The host runs Podman, with `/usr/local/bin/docker` as a small shim that routes plain `docker` commands to podman and `docker compose` to podman-compose, so tools that shell out to `docker` (including `d2 docker compose config`) work through Podman. Podman remains the only runtime that can run a container on that host. The test script is not in this repo (`~/workspace/sandbox-test/run-tests.sh` on the test machine); 18 of 26 checks pass, and every failure is traced to the test environment, not the product.
 
 Proven:
 

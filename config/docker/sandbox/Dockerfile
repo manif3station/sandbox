@@ -28,7 +28,8 @@
 #     password (locked) and root login is disabled (see docker/sshd_config).
 #   - Never commit a real TS_AUTHKEY in .env — pass it in your shell.
 
-FROM ubuntu:24.04
+ARG BASE_IMAGE
+FROM $BASE_IMAGE
 
 # Version of this sandbox, from .env via compose build args (VERSION=...).
 # Stamped on the image so `docker inspect` can tell builds apart.

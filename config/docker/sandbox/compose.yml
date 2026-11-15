@@ -21,7 +21,6 @@
 # `docker compose down` keeps all five volumes. `docker compose down -v`
 # DESTROYS them — that is the only way to lose the persisted state, so
 # treat `-v` as "factory reset this box".
-
 services:
   sandbox:
     # tini as PID 1: reaps the background daemons (tailscaled, dockerd) and
@@ -32,22 +31,12 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
+        BASE_IMAGE: ${BASE_IMAGE:-ubuntu:latest}
         VERSION: ${VERSION:-latest}
     image: sandbox:${VERSION:-latest}
-    container_name: sandbox
-    hostname: sandbox
-    # Docker-in-Docker + Tailscale both need this: dockerd manages iptables
-    # and its bridge, tailscaled needs /dev/net/tun and NET_ADMIN. A sandbox
-    # is root-equivalent on the host by design — see the security notes at
-    # the top of the Dockerfile.
     privileged: true
     devices:
-      - /dev/net/tun:/dev/net/tun
-    ports:
-      # Host-side SSH for machines on the same LAN / the host itself.
-      # Over Tailscale, SSH goes straight to port 22 on the tailnet IP —
-      # no mapping needed there.
-      - "2222:22"
+    - /dev/net/tun:/dev/net/tun
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_HOSTNAME: ${TS_HOSTNAME:-sandbox}
@@ -59,11 +48,11 @@ services:
       TESTER_AUTHORIZED_KEY: ${TESTER_AUTHORIZED_KEY:-}
       TZ: ${TZ:-Europe/London}
     volumes:
-      - docker-data:/var/lib/docker
-      - tailscale-state:/var/lib/tailscale
-      - tester-ssh:/home/tester/.ssh
-      - ssh-host-keys:/etc/ssh
-      - sandbox-work:/home/tester/work
+    - docker-data:/var/lib/docker
+    - tailscale-state:/var/lib/tailscale
+    - tester-ssh:/home/tester/.ssh
+    - ssh-host-keys:/etc/ssh
+    - sandbox-work:/home/tester/work
     # tester's authorized_keys is seeded from TESTER_AUTHORIZED_KEY (.env)
     # on first boot only, when the tester-ssh volume is still empty — the
     # volume always wins after that.
@@ -71,12 +60,7 @@ services:
 
 volumes:
   docker-data:
-    name: sandbox-docker-data
   tailscale-state:
-    name: sandbox-tailscale-state
   tester-ssh:
-    name: sandbox-tester-ssh
   ssh-host-keys:
-    name: sandbox-ssh-host-keys
   sandbox-work:
-    name: sandbox-work
